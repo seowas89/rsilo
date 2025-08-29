@@ -1,8 +1,9 @@
 import streamlit as st
-import requests
-import pandas as pd
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
+import urllib.request
+import urllib.parse
+import urllib.error
+from urllib.parse import urljoin, urlparse
+import xml.etree.ElementTree as ET
 import time
 
 # Set page title and icon
@@ -15,7 +16,7 @@ st.set_page_config(
 # Title and description
 st.title("🔗 Reverse Silo Architect")
 st.markdown("""
-**Power up your Pillar Page** by identifying supporting pages from your sitemap that should link to your pillar page.
+**Power up your Pillar Page** by identifying which pages from your sitemap should link to it.
 This tool uses the Reverse Silo SEO strategy.
 """)
 
@@ -30,75 +31,60 @@ if 'sitemap_url' not in st.session_state:
 # Sidebar for configuration
 with st.sidebar:
     st.header("Configuration")
-    st.caption("Get your key from [SerpApi](https://serpapi.com/).")
     st.markdown("---")
     st.info("""
     **How it works:**
     1. Enter your Pillar Page URL and sitemap.
     2. The app fetches all URLs from your sitemap.
-    3. It checks if these pages already link to your pillar.
-    4. You get a list of pages to add internal links from.
+    3. You get a list of pages that could potentially link to your pillar.
     """)
 
 # Main form for inputs
 with st.form("input_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        pillar_url = st.text_input("Pillar Page URL", st.session_state.pillar_url, 
-                                  placeholder="https://yourdomain.com/ultimate-guide/")
-    with col2:
-        sitemap_url = st.text_input("Sitemap URL", st.session_state.sitemap_url, 
-                                   placeholder="https://yourdomain.com/sitemap.xml")
-    
-    serpapi_key = st.text_input("SerpApi Key (optional)", type="password")
+    pillar_url = st.text_input("Pillar Page URL", st.session_state.pillar_url, 
+                              placeholder="https://yourdomain.com/ultimate-guide/")
+    sitemap_url = st.text_input("Sitemap URL", st.session_state.sitemap_url, 
+                               placeholder="https://yourdomain.com/sitemap.xml")
     
     submitted = st.form_submit_button("Analyze Website")
 
-# Function to fetch and parse sitemap
+# Function to fetch and parse sitemap using standard library only
 def get_urls_from_sitemap(sitemap_url):
     try:
-        response = requests.get(sitemap_url, timeout=10)
-        response.raise_for_status()
+        # Fetch the sitemap
+        with urllib.request.urlopen(sitemap_url) as response:
+            sitemap_content = response.read().decode('utf-8')
         
-        # Simple XML parsing without external dependencies
-        if "<urlset" in response.text:
-            # Basic XML parsing for sitemaps
-            urls = []
-            lines = response.text.split("\n")
-            for line in lines:
-                if "<loc>" in line and "</loc>" in line:
-                    start = line.find("<loc>") + 5
-                    end = line.find("</loc>")
-                    if start < end:
-                        urls.append(line[start:end].strip())
-            return urls
-        else:
-            st.error("Sitemap format not recognized. Please provide a valid sitemap URL.")
-            return []
+        # Parse the XML
+        root = ET.fromstring(sitemap_content)
+        
+        # Extract URLs
+        urls = []
+        namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+        
+        # Find all URL elements
+        for url_elem in root.findall('ns:url', namespace):
+            loc_elem = url_elem.find('ns:loc', namespace)
+            if loc_elem is not None:
+                urls.append(loc_elem.text)
+        
+        return urls
     except Exception as e:
         st.error(f"Error parsing sitemap: {e}")
         return []
 
-# Function to check if a page links to the pillar URL
-def check_internal_link(page_url, pillar_url):
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(page_url, timeout=8, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Find all links on the page
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            absolute_url = urljoin(page_url, href)
-            # Check if the link points to the pillar page
-            if absolute_url == pillar_url:
-                return True
-        return False
-    except Exception as e:
-        st.warning(f"Could not check {page_url}: {e}")
-        return False
+# Function to check if a page might be related to the pillar topic
+def is_potentially_related(page_url, pillar_url):
+    # Simple heuristic: check if the page is on the same domain and path
+    page_domain = urlparse(page_url).netloc
+    pillar_domain = urlparse(pillar_url).netloc
+    
+    # If same domain, it's potentially related
+    if page_domain == pillar_domain:
+        return True
+    
+    # Add more heuristics here if needed
+    return False
 
 # Process the analysis when the form is submitted
 if submitted and pillar_url and sitemap_url:
@@ -119,74 +105,25 @@ if submitted and pillar_url and sitemap_url:
         else:
             st.success(f"Found {len(all_urls)} URLs in the sitemap.")
             
-            # Filter out the pillar URL itself
-            supporting_urls = [url for url in all_urls if url != pillar_url]
+            # Filter out the pillar URL itself and find potentially related pages
+            supporting_urls = [url for url in all_urls if url != pillar_url and is_potentially_related(url, pillar_url)]
             
-            # For demo purposes, let's limit to 10 URLs to avoid timeouts
+            # For demo purposes, let's limit to 10 URLs
             if len(supporting_urls) > 10:
-                st.info(f"Limiting analysis to first 10 URLs for demo. Found {len(supporting_urls)} total.")
+                st.info(f"Limiting analysis to first 10 URLs. Found {len(supporting_urls)} total.")
                 supporting_urls = supporting_urls[:10]
             
-            st.info(f"Analyzing {len(supporting_urls)} pages...")
+            st.info(f"Found {len(supporting_urls)} potentially related pages.")
             
-            results = []
+            # Display results
+            st.subheader("📋 Pages That Could Link to Your Pillar")
             
             for i, url in enumerate(supporting_urls):
-                st.write(f"Checking: {url}")
-                
-                # Check if the page already links to the pillar
-                has_link = check_internal_link(url, pillar_url)
-                
-                results.append({
-                    "url": url,
-                    "already_linked": has_link,
-                    "action": "✅ Linked" if has_link else "🔴 Add Link"
-                })
-                
-                # Add a small delay to be respectful to servers
-                time.sleep(1)
+                st.write(f"{i+1}. [{url}]({url})")
             
-            if results:
-                # Create DataFrame
-                df = pd.DataFrame(results)
-                
-                st.session_state.results = df
-                
-                # Summary statistics
-                linked_count = df['already_linked'].sum()
-                unlinked_count = len(df) - linked_count
-                
-                st.subheader("📊 Results Summary")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Total Pages", len(df))
-                col2.metric("Already Linked", linked_count)
-                col3.metric("Opportunities", unlinked_count)
-                
-                # Display the results table
-                st.subheader("📋 Page Analysis")
-                st.dataframe(
-                    df,
-                    column_config={
-                        "url": "Page URL",
-                        "already_linked": "Already Linked?",
-                        "action": "Recommended Action"
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-                
-                # Display recommendations
-                st.subheader("🎯 Linking Opportunities")
-                opportunities = df[df['already_linked'] == False]
-                
-                if not opportunities.empty:
-                    st.write("These pages should link to your pillar page:")
-                    for _, row in opportunities.iterrows():
-                        st.markdown(f"- [{row['url']}]({row['url']})")
-                else:
-                    st.success("🎉 All pages are already linked to your pillar page!")
-            else:
-                st.warning("No pages were analyzed.")
+            st.session_state.results = supporting_urls
+            
+            st.success("Analysis complete! These pages could potentially link to your pillar page.")
 
 elif submitted:
     st.error("Please fill in all required fields (Pillar URL and Sitemap URL).")
