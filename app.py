@@ -6,6 +6,20 @@ from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 import os
 import time
+import sys
+import subprocess
+
+# Function to check and install missing packages
+def install_missing_packages():
+    required = ['requests', 'beautifulsoup4', 'xmltodict', 'pandas', 'lxml']
+    for package in required:
+        try:
+            __import__(package)
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Install any missing packages
+install_missing_packages()
 
 # Set page title and icon
 st.set_page_config(
